@@ -299,14 +299,10 @@ async def to_code(config):
     if source := config.get(CONF_GMF_SOURCE):
         add_idf_component(name="espressif/gmf_ai_audio", path=source)
     else:
-        add_idf_component(
-            name="espressif/gmf_ai_audio",
-            repo="https://github.com/n-IA-hane/esp-gmf.git",
-            # Keep ESP-SR 2.6.0: upstream GMF 1.1.1 still requires ESP-SR 2.5.*.
-            # The direct manager path uses only official runtime APIs.
-            ref="b1e077aa5fd34e937752712f94b1a515d459b116",
-            path="elements/gmf_ai_audio",
-        )
+        # Espressif's published GMF AI Audio 1.1.2 (ESP Component Registry):
+        # requires ESP-SR 2.6.*, which made the n-IA-hane/esp-gmf fork
+        # unnecessary; the AFE manager API used here is unchanged.
+        add_idf_component(name="espressif/gmf_ai_audio", ref="1.1.2")
     add_idf_component(name="espressif/esp-sr", ref="2.6.0")
     add_idf_component(
         name="esp_sr_model_selection",
