@@ -1581,14 +1581,15 @@ void EspAfe::manager_result_cb_(afe_fetch_result_t *result, void *ctx) {
       result->data_size <= 0 || result->data_size % sizeof(int16_t) != 0) {
     return;
   }
-  if (ResultTapFn tap = self->result_tap_.load(std::memory_order_acquire)) {
+  if (const int taps = self->result_tap_count_.load(std::memory_order_acquire); taps > 0) {
     const ResultTap view{result->data,
                          static_cast<int>(result->data_size / sizeof(int16_t)),
                          result->raw_data,
                          result->raw_data_channels,
                          result->trigger_channel_id,
                          static_cast<int>(result->vad_state)};
-    tap(view, self->result_tap_ctx_);
+    for (int i = 0; i < taps; i++)
+      self->result_taps_[i].fn(view, self->result_taps_[i].ctx);
   }
   if (!self->accepting_processing_() ||
       self->drain_request_.load(std::memory_order_acquire)) {
