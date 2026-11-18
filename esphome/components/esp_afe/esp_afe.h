@@ -208,7 +208,27 @@ class EspAfe final : public Component, public AudioProcessor {
 
   ~EspAfe() override;
 
+  // Diagnostic tap (used by the bss_probe test firmware). Called on the AFE fetch
+  // task with every fetch result, before the output is passed on. The pointers are
+  // valid only during the call; keep the callback short (copy and return).
+  struct ResultTap {
+    const int16_t *data;     // the AFE output (the stream that is passed on)
+    int samples;             // samples in data
+    const int16_t *raw_data; // afe_fetch_result_t::raw_data (may be null)
+    int raw_data_channels;   // afe_fetch_result_t::raw_data_channels
+    int trigger_channel_id;  // afe_fetch_result_t::trigger_channel_id
+    int vad_state;           // afe_fetch_result_t::vad_state
+  };
+  using ResultTapFn = void (*)(const ResultTap &tap, void *ctx);
+  void set_result_tap(ResultTapFn fn, void *ctx) {
+    this->result_tap_ctx_ = ctx;
+    this->result_tap_.store(fn, std::memory_order_release);
+  }
+
  protected:
+  std::atomic<ResultTapFn> result_tap_{nullptr};
+  void *result_tap_ctx_{nullptr};
+
   // Derive aec_mode_t from afe_type + afe_mode
   aec_mode_t derive_aec_mode_() const;
   int afe_mic_channels_() const;
