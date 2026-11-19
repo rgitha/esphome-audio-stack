@@ -333,6 +333,10 @@ class ESPAudioStack final : public Component {
   void set_output_volume(float volume);
   void set_output_volume_q31(int32_t q31);
   float get_master_volume() const { return this->master_volume_public_.load(std::memory_order_relaxed); }
+  // Output boost (dB, + or -) on top of output volume and master volume; the
+  // total is capped at 0 dB, so near full volume a positive boost has less effect.
+  void set_output_boost_db(float db);
+  float get_output_boost_db() const { return this->output_boost_db_.load(std::memory_order_relaxed); }
 
   // ES8311 Digital Feedback mode: RX is stereo with L=ADC(mic), R=DAC(ref)
   void set_use_stereo_aec_reference(bool use) { this->use_stereo_aec_ref_ = use; }
@@ -958,6 +962,8 @@ class ESPAudioStack final : public Component {
   std::atomic<int32_t> output_volume_q31_{INT32_MAX};      // media_player/speaker abstraction volume
   std::atomic<int32_t> master_volume_q31_{INT32_MAX};      // board master volume
   std::atomic<float> master_volume_linear_{1.0f};          // unclipped user value for hardware codec volume APIs
+  std::atomic<float> output_boost_db_{0.0f};               // output boost (dB), see set_output_boost_db()
+  std::atomic<float> hardware_master_effective_{1.0f};     // codec master actually applied (master + boost headroom)
   std::atomic<float> master_volume_min_db_{-49.0f};                     // 0..100% master curve floor; 0% remains hard mute
   bool use_stereo_aec_ref_{false};  // ES8311 digital feedback: RX stereo with L=mic, R=ref
   bool ref_channel_right_{false};   // Which channel is AEC reference: false=L, true=R

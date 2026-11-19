@@ -162,17 +162,56 @@ void ESPAudioStack::set_output_volume_q31(int32_t q31) {
     this->update_hot_output_volume_();
 }
 
+void ESPAudioStack::set_output_boost_db(float db) {
+  if (!std::isfinite(db))
+    db = 0.0f;
+  db = std::min(std::max(db, -24.0f), 24.0f);
+  const float previous = this->output_boost_db_.exchange(db, std::memory_order_relaxed);
+  if (previous != db) {
+    ESP_LOGD(TAG, "Output boost %.1f dB", db);
+    this->update_hot_output_volume_();
+  }
+}
+
 void ESPAudioStack::update_hot_output_volume_() {
   const int32_t output_q31 = this->output_volume_q31_.load(std::memory_order_relaxed);
   const int32_t master_q31 = this->master_volume_q31_.load(std::memory_order_relaxed);
+  // Output boost (dB): added to output volume + master, the total capped at 0 dB.
+  const float boost_db = this->output_boost_db_.load(std::memory_order_relaxed);
 #ifdef USE_ESP_AUDIO_STACK_HARDWARE_OUTPUT_CODEC
   const bool hardware_master = true;
   const float public_master = this->master_volume_linear_.load(std::memory_order_relaxed);
-  const int32_t combined_q31 = output_q31;
+  int32_t combined_q31 = output_q31;
+  float hardware_master_effective = public_master;
+  if (boost_db != 0.0f && output_q31 > 0 && public_master > 0.0f) {
+    // Software stage takes the boost first; what would go above 0 dB there is
+    // given to the codec master (curve: 1 % = min_db, 100 % = 0 dB, linear in dB).
+    const float out_db = output_q31 >= INT32_MAX
+                             ? 0.0f
+                             : 20.0f * std::log10(static_cast<float>(output_q31) / static_cast<float>(INT32_MAX));
+    const float want_db = out_db + boost_db;
+    if (want_db <= 0.0f) {
+      combined_q31 = esp_audio_libs::gain::db_to_q31(want_db);
+    } else {
+      combined_q31 = INT32_MAX;
+      const float min_db = this->master_volume_min_db_.load(std::memory_order_relaxed);
+      if (min_db < 0.0f && public_master < 1.0f) {
+        const float pct = std::max(public_master * 100.0f, 1.0f);
+        const float master_db = min_db * (1.0f - (pct - 1.0f) / 99.0f);
+        const float hw_db = std::min(0.0f, master_db + want_db);
+        hardware_master_effective = std::min(1.0f, (1.0f + 99.0f * (1.0f - hw_db / min_db)) / 100.0f);
+      }
+    }
+  }
+  this->hardware_master_effective_.store(hardware_master_effective, std::memory_order_relaxed);
 #else
   const bool hardware_master = false;
   const float public_master = static_cast<float>(master_q31) / static_cast<float>(INT32_MAX);
-  const int32_t combined_q31 = multiply_q31(output_q31, master_q31);
+  int32_t combined_q31 = multiply_q31(output_q31, master_q31);
+  if (boost_db != 0.0f && combined_q31 > 0) {
+    const float boosted = static_cast<float>(combined_q31) / static_cast<float>(INT32_MAX) * std::pow(10.0f, boost_db / 20.0f);
+    combined_q31 = boosted >= 1.0f ? INT32_MAX : static_cast<int32_t>(boosted * static_cast<float>(INT32_MAX));
+  }
 #endif
   const float linear = static_cast<float>(combined_q31) / static_cast<float>(INT32_MAX);
   this->master_volume_public_.store(public_master, std::memory_order_relaxed);
@@ -186,8 +225,8 @@ void ESPAudioStack::update_hot_output_volume_() {
   if (previous != combined_q31) {
     ESP_LOGD(TAG,
              "Master volume: output_q31=%" PRId32 " master_q31=%" PRId32 " hot_q31=%" PRId32
-             " linear=%.3f hw_master=%s previous_q31=%" PRId32,
-             output_q31, master_q31, combined_q31, linear, hardware_master ? "yes" : "no", previous);
+             " linear=%.3f hw_master=%s boost=%.1f dB previous_q31=%" PRId32,
+             output_q31, master_q31, combined_q31, linear, hardware_master ? "yes" : "no", boost_db, previous);
   }
 }
 
@@ -1487,7 +1526,7 @@ void ESPAudioStack::apply_pending_hardware_volume_() {
   // changes must not allocate; an explicit retry still reaches the backend.
   if (this->hardware_volume_curve_dirty_.exchange(false, std::memory_order_acq_rel))
     this->codec_backend_.set_output_volume_curve(this->master_volume_min_db_.load(std::memory_order_relaxed));
-  this->codec_backend_.set_output_volume(this->master_volume_public_.load(std::memory_order_relaxed));
+  this->codec_backend_.set_output_volume(this->hardware_master_effective_.load(std::memory_order_relaxed));
 #endif
 }
 
