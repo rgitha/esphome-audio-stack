@@ -208,7 +208,39 @@ class EspAfe final : public Component, public AudioProcessor {
 
   ~EspAfe() override;
 
+  // Result tap: called on the AFE fetch task with every fetch result, before the
+  // output is passed on. Used by the raw-stream microphones (esp_afe microphone
+  // platform) and the bss_probe test firmware. The pointers are valid only during
+  // the call; keep the callback short (copy and return). Listeners are added during
+  // setup only; up to MAX_RESULT_TAPS.
+  struct ResultTap {
+    const int16_t *data;     // the AFE output (the stream that is passed on)
+    int samples;             // samples in data
+    const int16_t *raw_data; // afe_fetch_result_t::raw_data (may be null)
+    int raw_data_channels;   // afe_fetch_result_t::raw_data_channels
+    int trigger_channel_id;  // afe_fetch_result_t::trigger_channel_id
+    int vad_state;           // afe_fetch_result_t::vad_state
+  };
+  using ResultTapFn = void (*)(const ResultTap &tap, void *ctx);
+  static constexpr int MAX_RESULT_TAPS = 4;
+  bool add_result_tap(ResultTapFn fn, void *ctx) {
+    const int n = this->result_tap_count_.load(std::memory_order_relaxed);
+    if (n >= MAX_RESULT_TAPS)
+      return false;
+    this->result_taps_[n] = {fn, ctx};
+    this->result_tap_count_.store(n + 1, std::memory_order_release);  // publish after the slot is filled
+    return true;
+  }
+  void set_result_tap(ResultTapFn fn, void *ctx) { this->add_result_tap(fn, ctx); }
+
  protected:
+  struct ResultTapSlot {
+    ResultTapFn fn;
+    void *ctx;
+  };
+  ResultTapSlot result_taps_[MAX_RESULT_TAPS]{};
+  std::atomic<int> result_tap_count_{0};
+
   // Derive aec_mode_t from afe_type + afe_mode
   aec_mode_t derive_aec_mode_() const;
   int afe_mic_channels_() const;
