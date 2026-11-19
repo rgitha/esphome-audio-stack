@@ -233,6 +233,26 @@ class EspAfe final : public Component, public AudioProcessor {
   }
   void set_result_tap(ResultTapFn fn, void *ctx) { this->add_result_tap(fn, ctx); }
 
+  // Mic tap: called on the caller's task of process() with the microphone input
+  // before the AFE (16 kHz, interleaved transport channels; for two mics channel 0 is
+  // the first transport mic). Pointer valid only during the call; copy and return.
+  // Added during setup only; up to MAX_MIC_TAPS. Used by the DOA probe.
+  struct MicTap {
+    const int16_t *mic;  // interleaved, channels per sample
+    int samples;         // samples per channel
+    int channels;        // transport mic channels
+  };
+  using MicTapFn = void (*)(const MicTap &tap, void *ctx);
+  static constexpr int MAX_MIC_TAPS = 2;
+  bool add_mic_tap(MicTapFn fn, void *ctx) {
+    const int n = this->mic_tap_count_.load(std::memory_order_relaxed);
+    if (n >= MAX_MIC_TAPS)
+      return false;
+    this->mic_taps_[n] = {fn, ctx};
+    this->mic_tap_count_.store(n + 1, std::memory_order_release);
+    return true;
+  }
+
  protected:
   struct ResultTapSlot {
     ResultTapFn fn;
@@ -240,6 +260,12 @@ class EspAfe final : public Component, public AudioProcessor {
   };
   ResultTapSlot result_taps_[MAX_RESULT_TAPS]{};
   std::atomic<int> result_tap_count_{0};
+  struct MicTapSlot {
+    MicTapFn fn;
+    void *ctx;
+  };
+  MicTapSlot mic_taps_[MAX_MIC_TAPS]{};
+  std::atomic<int> mic_tap_count_{0};
 
   // Derive aec_mode_t from afe_type + afe_mode
   aec_mode_t derive_aec_mode_() const;

@@ -1222,6 +1222,15 @@ bool EspAfe::process(const int16_t *in_mic, const int16_t *in_ref, int16_t *out,
     return false;
   }
 
+  {
+    const int taps = this->mic_tap_count_.load(std::memory_order_acquire);
+    if (taps > 0) {
+      const MicTap tap{in_mic, qs, transport_mic_channels};
+      for (int i = 0; i < taps; i++)
+        this->mic_taps_[i].fn(tap, this->mic_taps_[i].ctx);
+    }
+  }
+
   diag_add(this->process_frame_count_);
 
   const int64_t process_start_us = ESP_AFE_TIMING_TELEMETRY ? esp_timer_get_time() : 0;
